@@ -6,10 +6,11 @@ from as5.as5 import run, load_images, convert_gray_luminance, binarize_images
 
 class TestAssignment:
     def test_all_cases(self, capsys):
-        inp = 'tests/resources/testcases/1.in'
+        inp = 'tests/resources/testcases/2.in'
         exp_out = ''
-        with open('tests/resources/testcases/1.out', 'r') as f:
+        with open('tests/resources/testcases/2.out', 'r') as f:
             exp_out = f.readlines()
+        exp_out = ''.join(exp_out)
         
         with replace_stdin(open(inp, 'r')):
             run()
