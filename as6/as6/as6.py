@@ -2,6 +2,7 @@ from collections import defaultdict
 from typing import Dict, List, Tuple
 
 import imageio
+from matplotlib.pyplot import axis
 import numpy as np
 import numpy.typing as npt
 import random
@@ -10,7 +11,7 @@ import os
 
 # Calculate error
 def root_mean_sq_err(ref_image, gen_image):
-    m, n = gen_image.shape
+    m, n, _ = gen_image.shape
     subtracted_image = gen_image.astype(float) - ref_image.astype(float)
     squared_image = np.square(subtracted_image)
     mean_image = squared_image / (n * m)
@@ -43,18 +44,19 @@ def k_means(
 ) -> List[int]:
     random.seed(seed)
     ids = np.sort(random.sample(range(0, M * N), k))
-    centroids = features[ids]
-    clusters = np.zeros(features.shape, dtype=np.uint8)
+    centroids = np.array(features[ids], copy=True)
+    clusters = np.zeros(features.shape[0], dtype=np.uint8)
     for _ in range(n):
         for index, feature in enumerate(features):
             closest_idx = find_closest_cluster(feature, centroids)
             clusters[index] = closest_idx
         for cluster in range(k):
-            centroids[cluster] = np.mean(features[np.where(clusters == cluster)], axis=0)
-    segmented = np.zeros_like(features)
-    for index in range(len(clusters)):
-        segmented[index] = centroids[clusters[index]]
-    return segmented
+            feat_idx = np.expand_dims(clusters == cluster, axis=1)
+            feat_idx = np.repeat(feat_idx, 3, axis=1)
+            sub_features = np.ma.masked_array(features, feat_idx)
+            centroid = sub_features.mean(axis=0)
+            centroids[cluster] = centroid
+    return centroids, clusters
 
 
 def create_XY_features(M, N):
@@ -72,14 +74,17 @@ def lum_reshape(image, M, N):
         (M * N, 1),
     )
 
+
 def rgb_image_from(
-    clusters: List[int],
     centroids: List[npt.NDArray[np.float32]],
+    clusters: List[int],
     feat_shape: Tuple,
     img_shape: Tuple,
 ):
     out_image = np.zeros(feat_shape, dtype=np.float32)
-    out_image = centroids[clusters]
+
+    for index in range(len(out_image)):
+        out_image[index] = centroids[clusters[index]]
     out_image = np.reshape(out_image, img_shape)
     return out_image
 
@@ -91,14 +96,15 @@ def gray_image_from(clusters, feat_shape, img_shape):
     out_image = np.reshape(out_image, img_shape)
     return out_image
 
+
 def main():
-    BASE_PATH = 'as6/tests/resources/TestCases-InputImages'
-    image_filename = os.path.join(BASE_PATH, 'image_1.png')
-    ref_image_filename = os.path.join(BASE_PATH, 'image_1_ref1.png')
+    BASE_PATH = "as6/tests/resources/TestCases-InputImages"
+    image_filename = os.path.join(BASE_PATH, "image_1.png")
+    ref_image_filename = os.path.join(BASE_PATH, "image_1_ref1.png")
     attributes_type = 1
     k = 5
     n = 10
-    seed = 42 #nice
+    seed = 42  # nice
     # image_filename = str(input().strip())
     # ref_image_filename = str(input().strip())
     # attributes_type = int(input().strip())
@@ -112,12 +118,12 @@ def main():
     M, N, _ = image.shape
 
     if attributes_type == 1:
-        features = np.reshape(image, (M*N, 3))
-        clusters = k_means(features, k, n, M, N, seed)
-        out_image = rgb_image_from(clusters, features.shape, (M, N, 3))
+        features = np.reshape(image, (M * N, 3))
+        centroids, clusters = k_means(features, k, n, M, N, seed)
+        out_image = rgb_image_from(centroids, clusters, features.shape, (M, N, 3))
     elif attributes_type == 2:
         XY = create_XY_features(M, N)
-        features = np.reshape(image, (M*N, 3))
+        features = np.reshape(image, (M * N, 3))
         features = np.concatenate((features, XY), axis=1)
         clusters = k_means(features, k, n, M, N, seed)
         out_image = rgb_image_from(clusters, features.shape, (M, N, 3))
@@ -136,5 +142,6 @@ def main():
     rmse = root_mean_sq_err(ref_image, out_image)
     print(rmse)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
