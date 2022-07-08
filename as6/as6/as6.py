@@ -1,18 +1,23 @@
-from collections import defaultdict
-from typing import Dict, List, Tuple
+# Henrique Bonini de Britto Menezes, 8956690, scc5830, 01/2022, Assignment 6 - Color Image Processing and Segmentation
+from typing import List, Tuple
 
 import imageio
-from matplotlib.pyplot import axis
 import numpy as np
 import numpy.typing as npt
 import random
-import os
 
 
-# Calculate error
-def root_mean_sq_err(ref_image, gen_image):
-    m, n, _ = gen_image.shape
-    subtracted_image = gen_image.astype(float) - ref_image.astype(float)
+def rmse(ref: npt.NDArray[np.float32], gen: npt.NDArray[np.float32]) -> float:
+    """Root Mean Squared Error calculation
+    Arguments:
+        ref: The reference image
+        gen: The generated image
+
+    Returns:
+        The Root Mean Squared Error between both images
+    """
+    m, n = gen.shape
+    subtracted_image = gen - ref
     squared_image = np.square(subtracted_image)
     mean_image = squared_image / (n * m)
     err = np.sum(mean_image)
@@ -20,18 +25,62 @@ def root_mean_sq_err(ref_image, gen_image):
     return np.sqrt(err)
 
 
-def distance(
-    query: npt.NDArray[np.float32], reference: npt.NDArray[np.float32]
+def root_mean_sq_err(
+    ref_image: npt.NDArray[np.float32], gen_image: npt.NDArray[np.float32]
 ) -> float:
-    return np.linalg.norm(query - reference)
+    """Root Mean Squared Error wrapper function.
+    This function separates the rmse calculation between
+    grayscale and RGB images
+
+    Arguments:
+        ref: The reference image
+        gen: The generated image
+
+    Returns:
+        The Root Mean Squared Error between both images
+    """
+    _, _, c = gen_image.shape
+    if c == 1:
+        return rmse(ref_image, np.squeeze(gen_image))
+    else:
+        err = [rmse(ref_image[:, :, i], gen_image[:, :, i]) for i in range(c)]
+        return np.mean(err)
 
 
-def find_closest_cluster(
-    feature: npt.NDArray[np.float32], centroids: List[npt.NDArray[np.float32]]
-) -> int:
-    centr_ranks = [distance(feature, centroid) for centroid in centroids]
-    closest = np.argmin(centr_ranks)
-    return closest
+def distance(
+    features: npt.NDArray[np.float32], centroid: npt.NDArray[np.float32]
+) -> float:
+    """Euclidean distance between two arrays
+
+    Arguments:
+        features: Image features array
+        centroid: Current centroid in analysis by the algorithm
+
+    Returns:
+        The Euclidean distance between both arrays
+    """
+    return np.sqrt(np.sum(np.power(features - centroid, 2), axis=1))
+
+
+def init_centroids(
+    features: npt.NDArray[np.float32], seed: int, M: int, N: int, k: int
+) -> npt.NDArray[np.float32]:
+    """Initialisation of centroids for k_means algorithm
+
+    Arguments:
+        features: Image features array
+        seed: The random seed to be used
+        M: The number of rows in the image
+        N: The number of columns in the image
+        k: The number of clusters for the k_means algorithm
+
+    Returns:
+        The initial centroids acquired from the features array
+    """
+    random.seed(seed)
+    ids = np.sort(random.sample(range(0, M * N), k))
+    centroids = np.array(features[ids])
+    return centroids
 
 
 def k_means(
@@ -41,25 +90,54 @@ def k_means(
     M: int,
     N: int,
     seed: int,
-) -> List[int]:
-    random.seed(seed)
-    ids = np.sort(random.sample(range(0, M * N), k))
-    centroids = np.array(features[ids], copy=True)
-    clusters = np.zeros(features.shape[0], dtype=np.uint8)
+) -> Tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    """K-Means algorith calculation function
+
+    Arguments:
+        features: Image features array
+        k: The number of clusters for the k_means algorithm
+        n: The number of iterations of the k_means algorithm
+        M: The number of rows in the image
+        N: The number of columns in the image
+        seed: The random seed to be used
+
+    Returns:
+        A tuple containing the final centroids acheived through
+    the algorithm, and the corresponding clusters for each image
+    feature.
+    """
+    centroids = init_centroids(features, seed, M, N, k)
+    clusters = np.zeros(features.shape[0], dtype=np.float32)
+
     for _ in range(n):
-        for index, feature in enumerate(features):
-            closest_idx = find_closest_cluster(feature, centroids)
-            clusters[index] = closest_idx
+        distances = np.zeros((features.shape[0], k), dtype=np.float32)
+
         for cluster in range(k):
-            feat_idx = np.expand_dims(clusters == cluster, axis=1)
-            feat_idx = np.repeat(feat_idx, 3, axis=1)
-            sub_features = np.ma.masked_array(features, feat_idx)
-            centroid = sub_features.mean(axis=0)
-            centroids[cluster] = centroid
+            centroid = np.full(features.shape, centroids[cluster])
+            dist = distance(features, centroid)
+            distances[:, cluster] = dist
+
+        clusters = np.argmin(distances, axis=1)
+
+        for cluster in range(k):
+            centroids[cluster] = np.mean(
+                features[np.where(clusters == cluster)], axis=0
+            )
+
     return centroids, clusters
 
 
-def create_XY_features(M, N):
+def create_XY_features(M: int, N: int) -> npt.NDArray[np.float32]:
+    """Helper function to create the positional features for
+    attribute_type cases 2 and 4
+
+    Arguments:
+        M: The number of rows in the image
+        N: The number of columns in the image
+
+    Returns:
+        An array with all positional features created
+    """
     X = np.tile(np.reshape(np.arange(M), (M, 1)), (1, N))
     Y = np.tile(np.reshape(np.arange(N), (N, 1)), (M, 1))
     X = np.reshape(X, (M * N, 1))
@@ -68,75 +146,145 @@ def create_XY_features(M, N):
     return XY
 
 
-def lum_reshape(image, M, N):
+def lum_reshape(
+    image: npt.NDArray[np.float32], M: int, N: int
+) -> npt.NDArray[np.float32]:
+    """Helper method to reshape and transform the image to grayscale
+    based on luminance
+
+    Arguments:
+        image: The image to be converted
+        M: The number of rows in the image
+        N: The number of columns in the image
+
+    Returns:
+        The converted image in grayscale and reshaped to a single column.
+    """
     return np.reshape(
         (0.299 * image[:, :, 0]) + (0.587 * image[:, :, 1]) + (0.114 * image[:, :, 2]),
         (M * N, 1),
     )
 
 
+def _normalize_image(image: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+    """Image normalisation function
+
+    Arguments:
+        image: The image to be normalised
+
+    Returns:
+        The normalised image between 0 and 255
+    """
+    image = (image - image.min()) / (image.max() - image.min())
+    image *= 255.0
+    return image
+
+
+def normalize_image(image: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+    """Image normalisation wrapper function to separate between normalisation
+    of grayscale and RGB images
+
+    Arguments:
+        image: The image to be normalised
+
+    Returns:
+        The normalised image between 0 and 255
+    """
+    _, _, channels = image.shape
+    if channels == 3:
+        for channel in range(channels):
+            image[:, :, channel] = _normalize_image(image[:, :, channel])
+    else:
+        image = _normalize_image(image)
+
+    return image
+
+
 def rgb_image_from(
     centroids: List[npt.NDArray[np.float32]],
     clusters: List[int],
-    feat_shape: Tuple,
-    img_shape: Tuple,
+    k: int,
+    img_shape: Tuple[int, int, int],
 ):
-    out_image = np.zeros(feat_shape, dtype=np.float32)
+    """RGB image creation function from calculated centroids
 
-    for index in range(len(out_image)):
-        out_image[index] = centroids[clusters[index]]
+    Arguments:
+        centroids: The calculated centroids from k_means algorithm
+        clusters: The clusters corresponding to each image feature
+        k: The number of clusters
+        img_shape: The expected shape of the resulting image
+
+    Returns:
+        The newly created image with pixel values from the
+    corresponding centroids
+    """
+    out_image = centroids[clusters % k][:, :3]
     out_image = np.reshape(out_image, img_shape)
+    out_image = normalize_image(out_image)
     return out_image
 
 
-def gray_image_from(clusters, feat_shape, img_shape):
-    out_image = np.zeros(feat_shape, dtype=np.float32)
-    for index, centroid in clusters.items():
-        out_image[index] = centroid
+def gray_image_from(
+    centroids: List[npt.NDArray[np.float32]],
+    clusters: List[int],
+    k: int,
+    img_shape: Tuple,
+):
+    """Grayscale image creation function from calculated centroids
+
+    Arguments:
+        centroids: The calculated centroids from k_means algorithm
+        clusters: The clusters corresponding to each image feature
+        k: The number of clusters
+        img_shape: The expected shape of the resulting image
+
+    Returns:
+        The newly created image with pixel values from the
+    corresponding centroids
+    """
+    out_image = centroids[clusters % k][:, 0]
     out_image = np.reshape(out_image, img_shape)
+    out_image = normalize_image(out_image)
     return out_image
 
 
 def main():
-    BASE_PATH = "as6/tests/resources/TestCases-InputImages"
-    image_filename = os.path.join(BASE_PATH, "image_1.png")
-    ref_image_filename = os.path.join(BASE_PATH, "image_1_ref1.png")
-    attributes_type = 1
-    k = 5
-    n = 10
-    seed = 42  # nice
-    # image_filename = str(input().strip())
-    # ref_image_filename = str(input().strip())
-    # attributes_type = int(input().strip())
-    # k = int(input().strip())
-    # n = int(input().strip())
-    # seed = int(input().strip())
+    image_filename = str(input().strip())
+    ref_image_filename = str(input().strip())
+    attributes_type = int(input().strip())
+    k = int(input().strip())
+    n = int(input().strip())
+    seed = int(input().strip())
 
     image = imageio.imread(image_filename).astype(np.float32)
     ref_image = imageio.imread(ref_image_filename).astype(np.float32)
 
     M, N, _ = image.shape
 
+    # Selecting flow based on attributes_type
     if attributes_type == 1:
         features = np.reshape(image, (M * N, 3))
         centroids, clusters = k_means(features, k, n, M, N, seed)
-        out_image = rgb_image_from(centroids, clusters, features.shape, (M, N, 3))
+        out_image = rgb_image_from(centroids, clusters, k, (M, N, 3))
     elif attributes_type == 2:
         XY = create_XY_features(M, N)
         features = np.reshape(image, (M * N, 3))
         features = np.concatenate((features, XY), axis=1)
-        clusters = k_means(features, k, n, M, N, seed)
-        out_image = rgb_image_from(clusters, features.shape, (M, N, 3))
+
+        centroids, clusters = k_means(features, k, n, M, N, seed)
+        out_image = rgb_image_from(centroids, clusters, k, (M, N, 3))
     elif attributes_type == 3:
         features = lum_reshape(image, M, N)
-        clusters = k_means(features, k, n, M, N, seed)
-        out_image = gray_image_from(clusters, features.shape, (M, N, 1))
+        centroids, clusters = k_means(features, k, n, M, N, seed)
+        out_image = gray_image_from(centroids, clusters, k, (M, N, 1))
     elif attributes_type == 4:
         features = lum_reshape(image, M, N)
         features = np.concatenate((features, create_XY_features(M, N)), axis=1)
-        clusters = k_means(features, k, n, M, N, seed)
-        out_image = gray_image_from(clusters, features.shape, (M, N, 1))
+
+        centroids, clusters = k_means(features, k, n, M, N, seed)
+        out_image = gray_image_from(centroids, clusters, k, (M, N, 1))
     else:
+        # Bogus entry
         exit(1)
 
     rmse = root_mean_sq_err(ref_image, out_image)
